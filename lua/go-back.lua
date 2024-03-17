@@ -3,19 +3,21 @@ local stack = require("go-back.stack")
 
 ---@class Config
 ---@field opt table
----@field __history_stack_instance Stack
----@field __future_stack_instance Stack
----@field __temporary_disable boolean
+---@field past_stack Stack
+---@field future_stack Stack
 local config = {
   opt = {
 		reuse_win = true,
+		default_mappings = true,
 		hook_events = { "BufHidden" },
+		excesive_logging = false,
 		-- hook_events = { "BufHidden", "TabLeave" },
 	},
-	__history_stack_instance = nil,
-	__future_stack_instance = nil,
-	__temporary_disable = false,
+	past_stack = stack.new(),
+	future_stack = stack.new(),
 }
+
+
 
 ---@class GoBackModule
 local M = {}
@@ -23,29 +25,56 @@ local M = {}
 ---@type Config
 M.config = config
 
-local function callback(opts)
-	if ! M.config.__temporary_disable then
-		local buf = opts.buf
-		local file = opts.file
-		local str = "{ " .. buf .. ", " .. file .. "}"
+local function log(msg)
+	if M.config.opt.excesive_logging then
+		vim.api.nvim_echo(msg, true, {})
+	end
+end
 
-		local left_buffer = { buf, file }
-		if M.config.__history_stack_instance:top() ~= left_buffer then
-			vim.api.nvim_echo({
-				{ "Storing buffer:" },
-				{ "buf: " .. buf },
-				{ "file: " .. file },
-			}, true, {})
-
-			M.config.__future_stack_instance = stack:new()
-			M.config.__history_stack_instance.push({ buf, file, str })
-		else
-			vim.api.nvim_echo({
+local function do_store_pred(bufid, file)
+	local top = M.config.past_stack.top()
+	if top and (top.buf == bufid or top.file == file) then
+			log({
 				{ "Buffer already on top of stack:" },
-				{ "buf: " .. buf },
-				{ "file: " .. file },
-			}, true, {})
+				{ "buf: " .. bufid .. "\n"},
+				{ "file: " .. file .. "\n"},
+			})
+		return false
+	end
+
+	local buftype = vim.api.nvim_get_option_value("buftype", {
+		buf = bufid,
+	})
+	if buftype ~= "" then
+		if buftype ~= "popup" and buftype ~= "nofile" then
+			log({
+				{ "Buffer is not file:" },
+				{ "buf: " .. bufid .. "\n" },
+				{ "file: " .. file .. "\n" },
+				{ "buftype: " .. buftype .. "\n" },
+			})
 		end
+		return false
+	end
+
+	log({
+		{ "Storing buffer:\n" },
+		{ "buf: " .. bufid .. "\n"},
+		{ "file: " .. file .. "\n"},
+	})
+
+	return true
+end
+
+
+local function callback(opts)
+	local buf = opts.buf
+	local file = opts.file
+	local str = "{ " .. buf .. ", " .. file .. "}"
+
+	if do_store_pred(buf, file) then
+		M.config.future_stack = stack:new()
+		M.config.past_stack.push({ buf=buf, file=file, str=str })
 	end
 end
 
@@ -53,9 +82,8 @@ end
 M.setup = function(args)
 	-- create stack instance 
 	local nessesary_config = {
-		__history_stack_instance = stack:new(),
-		__future_stack_instance = stack:new(),
-		__temporary_disable = false,
+		past_stack = stack:new(),
+		future_stack = stack:new(),
 	}
 
 	-- here insert any default setting
@@ -69,32 +97,94 @@ M.setup = function(args)
 		desc = "Callback to store visited buffers as visited.",
 		callback = callback,
 	})
-end
 
-function change_buffer(buf)
- if M.config.opt.reuse_win then
-		
-	else
+	vim.api.nvim_create_user_command("GoBackInHistory", M.go_back,
+			{ desc = "Go back in buffere history" })
+	vim.api.nvim_create_user_command("GoForwardInHistory", M.go_forward,
+			{ desc = "Go forward in buffere history" })
+	vim.api.nvim_create_user_command("GoBackPrintHistories", M.print_stacks,
+			{ desc = "Print stacks of go-back plugin" })
 
+	if M.config.opt.default_mappings then
+		vim.keymap.set("n", "<M-Left>", M.go_back,
+			{ desc = "Go back in buffere history" })
+		vim.keymap.set("n", "<M-Right>", M.go_forward,
+			{ desc = "Go forward in buffere history" })
 	end
 end
 
+local function change_buffer(buf)
+	if buf == nil then
+		log({{ "Nil buf detected" }})
+		return false
+	end
+	if buf.buf == nil then
+		log({{ "Nil buf.buf detected\n" },
+				 { vim.inspect(buf)}})
+		return false
+	end
+
+	if vim.api.nvim_buf_is_valid(buf.buf) then
+		log({
+			{ "Jumping to buffer:\n" },
+			{ "buf: " .. buf.buf .. "\n" },
+			{ "file: " .. buf.file .. "\n" },
+		 })
+		local winid = vim.fn.bufwinid(buf.buf)
+		if M.config.opt.reuse_win and winid ~= -1 then
+			-- change cursor to window with winid
+			vim.api.nvim_set_current_win(winid)
+		else
+			vim.api.nvim_set_current_buf(buf.buf)
+		end
+		return true
+	else
+		log({
+			{ "Cannot jump to buffer:\n" },
+			{ "buf: " .. buf.buf .. "\n" },
+			{ "file: " .. buf.file .. "\n" },
+			{ "Buffer invalid" }
+			})
+	end
+	return false
+end
+
 M.go_back = function()
-	local to_jump_to = M.config.__history_stack_instance:top()
-	M.config.__temporary_disable = true
-	change_buffer(to_jump_to)
-	M.config.__future_stack_instance:push(to_jump_to)
-	M.config.__history_stack_instance:pop()
-	M.config.__temporary_disable = false
+	-- get current buffer with file and push it onto future stack
+	local current_buf = {
+		buf = vim.api.nvim_get_current_buf(),
+		file = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
+	}
+
+	change_buffer(M.config.past_stack.top())
+	M.config.past_stack.pop()
+
+	if current_buf.buf ~= vim.api.nvim_get_current_buf() then
+		M.config.future_stack.try_push(current_buf)
+	end
 end
 
 M.go_forward = function()
-	local to_jump_to = M.config.__future_stack_instance:top()
-	M.config.__temporary_disable = true
-	change_buffer(to_jump_to)
-	M.config.__history_stack_instance:push(to_jump_to)
-	M.config.__future_stack_instance:pop()
-	M.config.__temporary_disable = false
+	local current_buf = {
+		buf = vim.api.nvim_get_current_buf(),
+		file = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
+	}
+
+	change_buffer(M.config.future_stack.pop())
+
+	if current_buf.buf ~= vim.api.nvim_get_current_buf() then
+		M.config.past_stack.try_push(current_buf)
+	end
+end
+
+M.print_stacks = function()
+	log({
+		{ "History stack: " },
+		{ M.config.past_stack.to_string() },
+		{ "Future stack: " },
+		{ M.config.future_stack.to_string() },
+	})
+
 end
 
 return M
