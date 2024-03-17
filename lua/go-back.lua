@@ -98,12 +98,12 @@ M.setup = function(args)
 		callback = callback,
 	})
 
-	vim.api.nvim_create_user_command("GoBackInHistory", M.go_back,
+	vim.api.nvim_create_user_command("GoBack", M.go_back,
 			{ desc = "Go back in buffere history" })
-	vim.api.nvim_create_user_command("GoForwardInHistory", M.go_forward,
+	vim.api.nvim_create_user_command("GoForward", M.go_forward,
 			{ desc = "Go forward in buffere history" })
 	vim.api.nvim_create_user_command("GoBackPrintHistories", M.print_stacks,
-			{ desc = "Print stacks of go-back plugin" })
+			{ desc = "Print stacks of go-back plugin (for debugging)" })
 
 	if M.config.opt.default_mappings then
 		vim.keymap.set("n", "<M-Left>", M.go_back,
@@ -132,7 +132,6 @@ local function change_buffer(buf)
 		 })
 		local winid = vim.fn.bufwinid(buf.buf)
 		if M.config.opt.reuse_win and winid ~= -1 then
-			-- change cursor to window with winid
 			vim.api.nvim_set_current_win(winid)
 		else
 			vim.api.nvim_set_current_buf(buf.buf)
@@ -150,7 +149,6 @@ local function change_buffer(buf)
 end
 
 M.go_back = function()
-	-- get current buffer with file and push it onto future stack
 	local current_buf = {
 		buf = vim.api.nvim_get_current_buf(),
 		file = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
