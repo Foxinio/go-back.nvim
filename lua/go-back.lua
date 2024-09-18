@@ -176,12 +176,12 @@ M.go_forward = function()
 end
 
 M.print_stacks = function()
-	log({
+	vim.api.nvim_echo({
 		{ "History stack: " },
 		{ M.config.past_stack.to_string() },
 		{ "Future stack: " },
 		{ M.config.future_stack.to_string() },
-	})
+	}, true, {})
 
 end
 
